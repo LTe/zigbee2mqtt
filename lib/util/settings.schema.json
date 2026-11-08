@@ -91,6 +91,24 @@
                             "default": 0,
                             "minimum": 0,
                             "description": "Pause availability pings when the backoff multiplier reaches over this limit until a new Zigbee message is received from the device. A value of zero disables pausing."
+                        },
+                        "ping_timeout": {
+                            "type": "number",
+                            "title": "Ping timeout",
+                            "default": 10000,
+                            "minimum": 1,
+                            "maximum": 2147483647,
+                            "description": "Response timeout of each availability ping in milliseconds. Adapter delivery and recovery can add to the total time.",
+                            "multipleOf": 1
+                        },
+                        "retry_delay": {
+                            "type": "number",
+                            "title": "Retry delay",
+                            "default": 3000,
+                            "minimum": 0,
+                            "maximum": 2147483647,
+                            "description": "Delay in milliseconds before retrying a failed availability ping.",
+                            "multipleOf": 1
                         }
                     },
                     "required": ["timeout"]
@@ -959,6 +977,56 @@
                     "title": "Disable automatic update check",
                     "description": "Zigbee devices may request a firmware update, and do so frequently, causing Zigbee2MQTT to reach out to third party servers. If you disable these device initiated checks, you can still initiate a firmware update check manually.",
                     "default": false
+                },
+                "availability": {
+                    "title": "Availability",
+                    "description": "Enable or disable availability, or override individual availability settings for this device. Omitted options inherit the global settings.",
+                    "oneOf": [
+                        {
+                            "type": "boolean"
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "timeout": {
+                                    "type": "number",
+                                    "title": "Timeout",
+                                    "description": "Time without a message before checking availability in minutes. Inherits the active or passive timeout when omitted."
+                                },
+                                "max_jitter": {
+                                    "type": "number",
+                                    "title": "Max jitter",
+                                    "description": "Maximum jitter (in msec) allowed on timeout to avoid availability pings trying to trigger around the same time"
+                                },
+                                "backoff": {
+                                    "type": "boolean",
+                                    "title": "Backoff",
+                                    "description": "Enable timeout backoff on failed availability pings (x1.5, x3, x6, x12...)"
+                                },
+                                "pause_on_backoff_gt": {
+                                    "type": "number",
+                                    "title": "Pause on backoff greater than",
+                                    "description": "Pause availability pings when the backoff multiplier reaches over this limit until a new Zigbee message is received from the device. A value of zero disables pausing."
+                                },
+                                "ping_timeout": {
+                                    "type": "number",
+                                    "title": "Ping timeout",
+                                    "minimum": 1,
+                                    "maximum": 2147483647,
+                                    "description": "Response timeout of each availability ping in milliseconds. Adapter delivery and recovery can add to the total time.",
+                                    "multipleOf": 1
+                                },
+                                "retry_delay": {
+                                    "type": "number",
+                                    "title": "Retry delay",
+                                    "minimum": 0,
+                                    "maximum": 2147483647,
+                                    "description": "Delay in milliseconds before retrying a failed availability ping.",
+                                    "multipleOf": 1
+                                }
+                            }
+                        }
+                    ]
                 }
             },
             "required": ["friendly_name"]

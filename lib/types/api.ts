@@ -65,7 +65,9 @@ export type Zigbee2MQTTDeviceOptions = {
     availability?:
         | boolean
         | {
-              timeout: number;
+              timeout?: number;
+              ping_timeout?: number;
+              retry_delay?: number;
               max_jitter?: number;
               backoff?: boolean;
               pause_on_backoff_gt?: number;
@@ -113,6 +115,8 @@ export type Zigbee2MQTTSettings = {
         enabled: boolean;
         active: {
             timeout: number;
+            ping_timeout: number;
+            retry_delay: number;
             max_jitter: number;
             backoff: boolean;
             pause_on_backoff_gt: number;

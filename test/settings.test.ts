@@ -96,6 +96,42 @@ describe("Settings", () => {
         expect(s).toStrictEqual(expected);
     });
 
+    it.each([true, false, {}, {max_jitter: 1000}, {timeout: 1 / 60}, {ping_timeout: 400}, {retry_delay: 0}])(
+        "Should accept partial or boolean device availability %j",
+        (availability) => {
+            write(configurationFile, {...minimalConfig, devices: {"0x0017880100000001": {friendly_name: "bulb", availability}}});
+            expect(settings.validate()).toEqual([]);
+            expect(settings.get().availability.active.ping_timeout).toBe(10000);
+            expect(settings.get().availability.active.retry_delay).toBe(3000);
+        },
+    );
+
+    it.each([
+        ["ping_timeout", 0],
+        ["ping_timeout", -1],
+        ["ping_timeout", 0.5],
+        ["ping_timeout", "400"],
+        ["ping_timeout", 2147483648],
+        ["retry_delay", -1],
+        ["retry_delay", 0.5],
+        ["retry_delay", "100"],
+        ["retry_delay", 2147483648],
+    ])("Should reject invalid availability %s=%s in global and device settings", (option, value) => {
+        write(configurationFile, {...minimalConfig, availability: {active: {timeout: 10, [option]: value}}});
+        expect(settings.validate().some((error) => error.startsWith(`availability/active/${option} `))).toBe(true);
+        write(configurationFile, {...minimalConfig, devices: {"0x0017880100000001": {friendly_name: "bulb", availability: {[option]: value}}}});
+        expect(settings.validate().some((error) => error.startsWith(`devices/0x0017880100000001/availability/${option} `))).toBe(true);
+    });
+
+    it("Should accept ping timing environment overrides", () => {
+        write(configurationFile, {...minimalConfig, availability: {active: {timeout: 10}}});
+        process.env.ZIGBEE2MQTT_CONFIG_AVAILABILITY_ACTIVE_PING_TIMEOUT = "400";
+        process.env.ZIGBEE2MQTT_CONFIG_AVAILABILITY_ACTIVE_RETRY_DELAY = "0";
+        settings.write();
+        expect(settings.get().availability.active).toMatchObject({ping_timeout: 400, retry_delay: 0});
+        expect(settings.validate()).toEqual([]);
+    });
+
     it("Should return settings", () => {
         write(configurationFile, {serial: {disable_led: true}});
         const s = settings.get();

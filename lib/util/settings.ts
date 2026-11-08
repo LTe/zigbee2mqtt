@@ -35,7 +35,7 @@ export const defaults = {
     },
     availability: {
         enabled: false,
-        active: {timeout: 10, max_jitter: 30000, backoff: true, pause_on_backoff_gt: 0},
+        active: {timeout: 10, ping_timeout: 10000, retry_delay: 3000, max_jitter: 30000, backoff: true, pause_on_backoff_gt: 0},
         passive: {timeout: 1500},
     },
     frontend: {

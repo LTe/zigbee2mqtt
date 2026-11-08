@@ -44,6 +44,17 @@ export default class Availability extends Extension {
         return utils.minutes(this.isActiveDevice(device) ? settings.get().availability.active.timeout : settings.get().availability.passive.timeout);
     }
 
+    private getPingTiming(device: Device, option: "ping_timeout" | "retry_delay"): number {
+        if (typeof device.options.availability === "object") {
+            const value = device.options.availability?.[option];
+            if (value != null && Number.isInteger(value) && value >= (option === "ping_timeout" ? 1 : 0) && value <= MAX_TIMEOUT) {
+                return value;
+            }
+        }
+
+        return settings.get().availability.active[option];
+    }
+
     private getMaxJitter(device: Device): number {
         if (typeof device.options.availability === "object" && device.options.availability?.max_jitter != null) {
             return device.options.availability.max_jitter;
@@ -163,7 +174,7 @@ export default class Availability extends Extension {
             for (let i = 1; i <= attempts; i++) {
                 try {
                     // Enable recovery if device is marked as available and first ping fails.
-                    await device.zh.ping(!available || i !== 2);
+                    await device.zh.ping(!available || i !== 2, this.getPingTiming(device, "ping_timeout"));
 
                     pingSuccess = true;
 
@@ -172,9 +183,9 @@ export default class Availability extends Extension {
                 } catch (error) {
                     logger.warning(`Failed to ping '${device.name}' (attempt ${i}/${attempts}, ${(error as Error).message})`);
 
-                    // Try again in 3 seconds.
+                    // Wait before retrying.
                     if (i !== attempts) {
-                        await utils.sleep(3);
+                        await utils.sleep(this.getPingTiming(device, "retry_delay") / 1000);
                     }
                 }
             }

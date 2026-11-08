@@ -284,6 +284,8 @@ describe("Extension: Bridge", () => {
                             max_jitter: 30000,
                             backoff: true,
                             pause_on_backoff_gt: 0,
+                            ping_timeout: 10000,
+                            retry_delay: 3000,
                         },
                         passive: {timeout: 1500},
                     },

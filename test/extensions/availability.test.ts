@@ -116,7 +116,7 @@ describe("Extension: Availability", () => {
 
         await setTimeAndAdvanceTimers(utils.minutes(7));
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(1);
-        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true);
+        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true, 10000);
         expect(mockMQTTPublishAsync).toHaveBeenCalledWith("zigbee2mqtt/bulb_color/availability", stringify({state: "offline"}), {
             retain: true,
             qos: 1,
@@ -154,7 +154,7 @@ describe("Extension: Availability", () => {
 
         await setTimeAndAdvanceTimers(utils.minutes(10));
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(1);
-        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true);
+        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true, 10000);
     });
 
     it("Should ping again when first ping fails", async () => {
@@ -168,8 +168,8 @@ describe("Extension: Availability", () => {
 
         await setTimeAndAdvanceTimers(utils.minutes(15));
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(2);
-        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true);
-        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(2, false);
+        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true, 10000);
+        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(2, false, 10000);
     });
 
     it("Should reset ping timer when device last seen changes for passive device", async () => {
@@ -248,6 +248,118 @@ describe("Extension: Availability", () => {
 
         await setTimeAndAdvanceTimers(utils.minutes(3));
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(0);
+    });
+
+    const queuePing = async (zh: typeof devices.bulb_color): Promise<void> => {
+        const availability = controller.getExtension("Availability")! as Availability;
+        // @ts-expect-error private
+        availability.addToPingQueue(controller.zigbee.resolveEntity(zh));
+        await flushPromises();
+    };
+
+    it("Should inherit global ping timing and preserve retry recovery", async () => {
+        settings.set(["availability", "active", "ping_timeout"], 2000);
+        settings.set(["availability", "active", "retry_delay"], 500);
+        devices.bulb_color.ping.mockRejectedValueOnce(new Error("timeout"));
+        vi.mocked(utils.sleep).mockClear();
+
+        await queuePing(devices.bulb_color);
+
+        expect(devices.bulb_color.ping.mock.calls).toEqual([
+            [true, 2000],
+            [false, 2000],
+        ]);
+        expect(utils.sleep).toHaveBeenNthCalledWith(1, 0.5);
+        expect(utils.sleep).toHaveBeenNthCalledWith(2, 2);
+    });
+
+    it("Should override ping timing for one device and allow zero retry delay", async () => {
+        settings.set(["devices", devices.bulb_color.ieeeAddr, "availability"], {ping_timeout: 400, retry_delay: 0});
+        devices.bulb_color.ping.mockRejectedValueOnce(new Error("timeout"));
+        vi.mocked(utils.sleep).mockClear();
+
+        await queuePing(devices.bulb_color);
+        await queuePing(devices.bulb_2);
+
+        expect(devices.bulb_color.ping.mock.calls).toEqual([
+            [true, 400],
+            [false, 400],
+        ]);
+        expect(devices.bulb_2.ping).toHaveBeenCalledWith(true, 10000);
+        expect(utils.sleep).toHaveBeenNthCalledWith(1, 0);
+    });
+
+    it("Should wait the configured retry delay before the second attempt", async () => {
+        settings.set(["devices", devices.bulb_color.ieeeAddr, "availability"], {retry_delay: 100});
+        devices.bulb_color.ping.mockRejectedValueOnce(new Error("timeout"));
+        vi.mocked(utils.sleep).mockImplementationOnce((seconds) => new Promise((resolve) => setTimeout(resolve, seconds * 1000)));
+
+        await queuePing(devices.bulb_color);
+        expect(devices.bulb_color.ping).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(99);
+        expect(devices.bulb_color.ping).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(devices.bulb_color.ping.mock.calls).toEqual([
+            [true, 10000],
+            [false, 10000],
+        ]);
+    });
+
+    it("Should preserve the default retry delay and mark offline after both failures", async () => {
+        devices.bulb_color.ping.mockRejectedValueOnce(new Error("timeout")).mockRejectedValueOnce(new Error("timeout"));
+        vi.setSystemTime(Date.now() + utils.minutes(11));
+        vi.mocked(utils.sleep).mockClear();
+        mockMQTTPublishAsync.mockClear();
+
+        await queuePing(devices.bulb_color);
+
+        expect(devices.bulb_color.ping.mock.calls).toEqual([
+            [true, 10000],
+            [false, 10000],
+        ]);
+        expect(utils.sleep).toHaveBeenNthCalledWith(1, 3);
+        expect(mockMQTTPublishAsync).toHaveBeenCalledWith("zigbee2mqtt/bulb_color/availability", stringify({state: "offline"}), {
+            retain: true,
+            qos: 1,
+        });
+    });
+
+    it("Should use only one custom-timeout attempt when already offline", async () => {
+        settings.set(["devices", devices.bulb_color.ieeeAddr, "availability"], {ping_timeout: 400, retry_delay: 100});
+        vi.setSystemTime(Date.now() + utils.minutes(11));
+        await queuePing(devices.bulb_color);
+        devices.bulb_color.ping.mockClear();
+        devices.bulb_color.ping.mockRejectedValueOnce(new Error("timeout"));
+        vi.mocked(utils.sleep).mockClear();
+
+        await queuePing(devices.bulb_color);
+
+        expect(devices.bulb_color.ping.mock.calls).toEqual([[true, 400]]);
+        expect(utils.sleep).toHaveBeenCalledExactlyOnceWith(2);
+    });
+
+    it("Should reset device ping timing to inherited values through device options", async () => {
+        const id = devices.bulb_color.ieeeAddr;
+        settings.changeEntityOptions(id, {availability: {ping_timeout: 400, retry_delay: 100}});
+        await queuePing(devices.bulb_color);
+        expect(devices.bulb_color.ping).toHaveBeenLastCalledWith(true, 400);
+        settings.changeEntityOptions(id, {availability: {ping_timeout: null, retry_delay: null}});
+        await queuePing(devices.bulb_color);
+        expect(devices.bulb_color.ping).toHaveBeenLastCalledWith(true, 10000);
+    });
+
+    it.each([null, -1, 0, 0.5, "400", 2147483648])("Should ignore invalid live device ping timeout %s", async (value) => {
+        settings.changeEntityOptions(devices.bulb_color.ieeeAddr, {availability: {ping_timeout: value}});
+        await queuePing(devices.bulb_color);
+        expect(devices.bulb_color.ping).toHaveBeenCalledWith(true, 10000);
+    });
+
+    it.each([-1, 0.5, "100", 2147483648])("Should ignore invalid live device retry delay %s", async (value) => {
+        settings.changeEntityOptions(devices.bulb_color.ieeeAddr, {availability: {retry_delay: value}});
+        devices.bulb_color.ping.mockRejectedValueOnce(new Error("timeout"));
+        vi.mocked(utils.sleep).mockClear();
+        await queuePing(devices.bulb_color);
+        expect(utils.sleep).toHaveBeenNthCalledWith(1, 3);
     });
 
     it("Should stop pinging device when it is removed", async () => {
@@ -370,9 +482,9 @@ describe("Extension: Availability", () => {
 
         devices.bulb_color.ping.mockImplementationOnce(() => new Promise((resolve) => setTimeout(resolve, 1000)));
         // @ts-expect-error private
-        availability.addToPingQueue(devices.bulb_color);
+        availability.addToPingQueue(controller.zigbee.resolveEntity(devices.bulb_color));
         // @ts-expect-error private
-        availability.addToPingQueue(devices.bulb_color_2);
+        availability.addToPingQueue(controller.zigbee.resolveEntity(devices.bulb_color_2));
 
         await availability.stop();
         await setTimeAndAdvanceTimers(utils.minutes(1));
@@ -485,7 +597,7 @@ describe("Extension: Availability", () => {
 
         await setTimeAndAdvanceTimers(utils.minutes(10.5)); // 10:30
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(1);
-        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true);
+        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true, 10000);
 
         await setTimeAndAdvanceTimers(utils.minutes(10.5)); // 21:00
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(2);
@@ -520,11 +632,11 @@ describe("Extension: Availability", () => {
 
         await setTimeAndAdvanceTimers(utils.minutes(10.5)); // 10:30
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(2);
-        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true);
-        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(2, false);
+        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true, 10000);
+        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(2, false, 10000);
         expect(devices.GLEDOPTO_2ID.ping).toHaveBeenCalledTimes(2);
-        expect(devices.GLEDOPTO_2ID.ping).toHaveBeenNthCalledWith(1, true);
-        expect(devices.GLEDOPTO_2ID.ping).toHaveBeenNthCalledWith(2, false);
+        expect(devices.GLEDOPTO_2ID.ping).toHaveBeenNthCalledWith(1, true, 10000);
+        expect(devices.GLEDOPTO_2ID.ping).toHaveBeenNthCalledWith(2, false, 10000);
 
         await setTimeAndAdvanceTimers(utils.minutes(14.5)); // 25:00
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(2);
@@ -572,8 +684,8 @@ describe("Extension: Availability", () => {
 
         await setTimeAndAdvanceTimers(utils.minutes(10.5)); // 10:30
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(2);
-        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true);
-        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(2, false);
+        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true, 10000);
+        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(2, false, 10000);
 
         await mockZHEvents.lastSeenChanged({device: devices.bulb_color});
 
@@ -617,11 +729,11 @@ describe("Extension: Availability", () => {
 
         await setTimeAndAdvanceTimers(utils.minutes(10.5)); // 10:30
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(2);
-        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true);
-        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(2, false);
+        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true, 10000);
+        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(2, false, 10000);
         expect(devices.QBKG03LM.ping).toHaveBeenCalledTimes(2);
-        expect(devices.QBKG03LM.ping).toHaveBeenNthCalledWith(1, true);
-        expect(devices.QBKG03LM.ping).toHaveBeenNthCalledWith(2, false);
+        expect(devices.QBKG03LM.ping).toHaveBeenNthCalledWith(1, true, 10000);
+        expect(devices.QBKG03LM.ping).toHaveBeenNthCalledWith(2, false, 10000);
 
         await setTimeAndAdvanceTimers(utils.minutes(14.5)); // 25:00
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(2);
@@ -690,8 +802,8 @@ describe("Extension: Availability", () => {
 
         await setTimeAndAdvanceTimers(utils.minutes(10.5)); // 10:30
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(2);
-        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true);
-        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(2, false);
+        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(1, true, 10000);
+        expect(devices.bulb_color.ping).toHaveBeenNthCalledWith(2, false, 10000);
 
         await setTimeAndAdvanceTimers(utils.minutes(9.5)); // 20:00
         expect(devices.bulb_color.ping).toHaveBeenCalledTimes(2);
